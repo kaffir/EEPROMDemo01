@@ -81,14 +81,121 @@ void i2c_eeprom_read_buffer( int deviceaddress, unsigned int eeaddress, byte *bu
         if (Wire.available()) buffer[c] = Wire.read();
 }
 
+void writeEEPROM(int deviceaddress, unsigned int eeaddress, char* data) 
+{
+  // Uses Page Write for 24LC256
+  // Allows for 64 byte page boundary
+  // Splits string into max 16 byte writes
+  unsigned char i=0, counter=0;
+  unsigned int  address;
+  unsigned int  page_space;
+  unsigned int  page=0;
+  unsigned int  num_writes;
+  unsigned int  data_len=0;
+  unsigned char first_write_size;
+  unsigned char last_write_size;  
+  unsigned char write_size;  
+  
+  // Calculate length of data
+  do{ data_len++; } while(data[data_len]);   
+   
+  // Calculate space available in first page
+  page_space = int(((eeaddress/64) + 1)*64)-eeaddress;
 
+  // Calculate first write size
+  if (page_space>16){
+     first_write_size=page_space-((page_space/16)*16);
+     if (first_write_size==0) first_write_size=16;
+  }   
+  else 
+     first_write_size=page_space; 
+    
+  // calculate size of last write  
+  if (data_len>first_write_size) 
+     last_write_size = (data_len-first_write_size)%16;   
+  
+  // Calculate how many writes we need
+  if (data_len>first_write_size)
+     num_writes = ((data_len-first_write_size)/16)+2;
+  else
+     num_writes = 1;  
+     
+  i=0;   
+  address=eeaddress;
+  for(page=0;page<num_writes;page++) 
+  {
+     if(page==0) write_size=first_write_size;
+     else if(page==(num_writes-1)) write_size=last_write_size;
+     else write_size=16;
+  
+     Wire.beginTransmission(deviceaddress);
+     Wire.write((int)((address) >> 8));   // MSB
+     Wire.write((int)((address) & 0xFF)); // LSB
+     counter=0;
+     do{ 
+        Wire.write((byte) data[i]);
+        i++;
+        counter++;
+     } while((data[i]) && (counter<write_size));  
+     Wire.endTransmission();
+     address+=write_size;   // Increment address for next write
+     
+     delay(6);  // needs 5ms for page write
+  }
+}
+ 
+void readEEPROM(int deviceaddress, unsigned int eeaddress,  
+                 unsigned char* data, unsigned int num_chars) 
+{
+  unsigned char i=0;
+  Wire.beginTransmission(deviceaddress);
+  Wire.write((int)(eeaddress >> 8));   // MSB
+  Wire.write((int)(eeaddress & 0xFF)); // LSB
+  Wire.endTransmission();
+ 
+  Wire.requestFrom(deviceaddress,num_chars);
+ 
+  while(Wire.available()) data[i++] = Wire.read();
 
+}
+
+void get_mock_data(char *buf, int num) {
+    char temp_mock[] = "20081708560010000000010000";
+    char tmp[4];
+
+    char ibuf[4];
+    if (num < 10) {
+        strcpy(tmp, "000");
+        itoa(num, ibuf, 10);
+        strcat(tmp, ibuf);
+    } else if (num < 100) {
+        strcpy(tmp, "00");
+        itoa(num, ibuf, 10);
+        strcat(tmp, ibuf);
+    } else if (num < 1000) {
+        strcpy(tmp, "0");
+        itoa(num, ibuf, 10);
+        strcat(tmp, ibuf);
+    } else {
+        //itoa(num, ibuf, 10);
+        strcpy(tmp, "1000");
+    }
+    strcat(temp_mock, tmp);
+    strcpy(buf, temp_mock);
+}
 
 void setup()
 {
     char somedata[] = "this is data from the eeprom"; // data to write
     char mockdata[] = "20081708560010000000010000000"; // 30 chars of gps info
-    char tmp[] = "0";
+    char tmp[30];
+    unsigned int start_mem_w = 0;
+    unsigned int start_mem_u = 4;
+    unsigned int start_w = 8;
+
+    char mem_w[] = "0001";
+    char mem_u[] = "0002";
+
     Wire.begin(); // initialise the connection
     Serial.begin(9600);
     //i2c_eeprom_write_page(0x50, 0, (byte *)mockdata, sizeof(mockdata)); // write to EEPROM
@@ -96,11 +203,53 @@ void setup()
 
     delay(100); //add a small delay
 
+    Serial.println("Start write position...");
+    Serial.print("Mem W: ");
+    Serial.println(mem_w);
+    Serial.print("Mem U: ");
+    Serial.println(mem_u);
+    writeEEPROM(EEPROM1, start_mem_w, mem_w);
+    writeEEPROM(EEPROM1, start_mem_u, mem_u);
+
+    char tmp4[4];
+    readEEPROM(EEPROM1, start_mem_w, tmp4, 4);
+    Serial.print("RMem W: ");
+    Serial.println(tmp4);
+    readEEPROM(EEPROM1, start_mem_u, tmp4, 4);
+    Serial.print("RMem U: ");
+    Serial.println(mem_u);
+    
+
+    char buf[5];
+    Serial.println("Start write...");
+    for (int i = 0; i < 10; i++) {
+        get_mock_data(tmp,i);
+        writeEEPROM(EEPROM1, (i * 30) + start_w, tmp);
+        //i2c_eeprom_write_page(0x50, (i * sizeof(tmp)), (byte *)tmp, sizeof(tmp)); // write to EEPROM
+        Serial.print("Write: ");
+        Serial.print(tmp);
+        Serial.print(" [");
+        Serial.print(strlen(tmp));
+        Serial.println("]");
+    }
+    
     Serial.println("Memory written");
+
+    strcpy(tmp, "");
+   for (int j = 0; j < 10; j++) {
+        //i2c_eeprom_read_buffer(0x50, (j * 30), tmp, 30);
+        readEEPROM(EEPROM1, (j * 30) + start_w, tmp, 30);
+        Serial.print("Read: ");
+        Serial.print(tmp);
+        Serial.print(" [");
+        Serial.print(strlen(tmp));
+        Serial.println("]");
+    }
 }
 
 void loop()
 {
+    /*
     int addr=0; //first address
     byte b = i2c_eeprom_read_byte(EEPROM1, 0); // access the first address from the memory
 
@@ -114,5 +263,6 @@ void loop()
     Serial.print("Total characters: ");
     Serial.println(addr+1);
     delay(2000);
+    */
 }
 
